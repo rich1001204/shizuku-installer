@@ -1,8 +1,8 @@
 package org.shizukuadb.install;
 
+import android.content.IntentSender;
 import android.os.ParcelFileDescriptor;
-import org.shizukuadb.install.IInstallCallback;
 
 interface IInstallerUserService {
-    void install(in ParcelFileDescriptor apk, IInstallCallback callback);
+    void install(in ParcelFileDescriptor apk, in IntentSender resultIntent);
 }

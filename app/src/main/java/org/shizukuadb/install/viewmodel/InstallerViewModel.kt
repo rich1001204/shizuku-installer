@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,11 +27,12 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private val parser = ApkParser(application)
-    private val installer = ShizukuInstaller()
+    private val installer = ShizukuInstaller(application)
     private val _installState = MutableStateFlow<InstallState>(InstallState.Idle)
     private val _shizukuState = MutableStateFlow<ShizukuState>(ShizukuState.NotRunning)
     private val _message = MutableStateFlow<String?>(null)
     private val loading = AtomicBoolean(false)
+    private var installTimeoutJob: Job? = null
 
     val installState: StateFlow<InstallState> = _installState.asStateFlow()
     val shizukuState: StateFlow<ShizukuState> = _shizukuState.asStateFlow()
@@ -83,11 +86,24 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
         }
         _message.value = null
         _installState.value = InstallState.Installing(apk)
+        installTimeoutJob?.cancel()
+        installTimeoutJob = viewModelScope.launch {
+            delay(60_000)
+            if (_installState.value is InstallState.Installing) {
+                _installState.value = InstallState.Failure(
+                    "Installation timed out. Check Shizuku and try again.",
+                    apk
+                )
+            }
+        }
         installer.install(
             getApplication<Application>().contentResolver,
             Uri.parse(apk.uriString)
         ) { success, message ->
             viewModelScope.launch {
+                if (_installState.value !is InstallState.Installing) return@launch
+                installTimeoutJob?.cancel()
+                installTimeoutJob = null
                 _installState.value = if (success) {
                     InstallState.Success(apk, message)
                 } else {
@@ -115,11 +131,15 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun resetToHome() {
+        installTimeoutJob?.cancel()
+        installTimeoutJob = null
         _installState.value = InstallState.Idle
         _message.value = null
     }
 
     fun retry() {
+        installTimeoutJob?.cancel()
+        installTimeoutJob = null
         val apk = (_installState.value as? InstallState.Failure)?.apk
         if (apk == null) resetToHome() else {
             _installState.value = InstallState.Ready(apk)
@@ -128,6 +148,7 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
+        installTimeoutJob?.cancel()
         Shizuku.removeRequestPermissionResultListener(permissionListener)
         installer.unbind()
         super.onCleared()
