@@ -13,12 +13,15 @@ class InstallerUserService : IInstallerUserService.Stub() {
 
     override fun install(apk: ParcelFileDescriptor, sizeBytes: Long, callback: IInstallCallback) {
         executor.execute {
+            var stage = "preparing APK stream"
+            var sessionId: Int? = null
             try {
                 if (sizeBytes <= 0) {
-                    callback.onResult(false, "The selected APK has no readable size")
+                    callback.onResult(false, "preparing APK stream failed: The selected APK has no readable size")
                     return@execute
                 }
 
+                stage = "pm install-create"
                 val create = runCommand(
                     listOf(
                         "/system/bin/pm",
@@ -34,17 +37,17 @@ class InstallerUserService : IInstallerUserService.Stub() {
                     )
                 )
                 if (!create.isSuccessful) {
-                    callback.onResult(false, humanizeError(create.displayOutput()))
+                    callback.onResult(false, formatStageFailure(stage, create))
                     return@execute
                 }
 
-                val sessionId = SESSION_ID_PATTERN.find(create.stdout + "\n" + create.stderr)
-                    ?.groupValues?.getOrNull(1)?.toIntOrNull()
+                sessionId = extractSessionId(create)
                 if (sessionId == null) {
-                    callback.onResult(false, "Package manager did not return an install session id.\n${create.displayOutput()}")
+                    callback.onResult(false, "$stage returned no session ID.\n${create.displayOutput()}")
                     return@execute
                 }
 
+                stage = "pm install-write"
                 val write = ParcelFileDescriptor.AutoCloseInputStream(apk).use { input ->
                     runCommand(
                         listOf(
@@ -59,23 +62,26 @@ class InstallerUserService : IInstallerUserService.Stub() {
                     )
                 }
                 if (!write.isSuccessful) {
-                    abandonSession(sessionId)
-                    callback.onResult(false, humanizeError(write.displayOutput()))
+                    callback.onResult(false, formatStageFailure("$stage (session $sessionId)", write))
                     return@execute
                 }
 
+                stage = "pm install-commit"
                 val commit = runCommand(
                     listOf("/system/bin/pm", "install-commit", sessionId.toString())
                 )
                 if (commit.isSuccessful) {
                     callback.onResult(true, "Installation completed")
                 } else {
-                    abandonSession(sessionId)
-                    callback.onResult(false, humanizeError(commit.displayOutput()))
+                    callback.onResult(false, formatStageFailure("$stage (session $sessionId)", commit))
                 }
             } catch (error: Exception) {
+                sessionId?.let(::abandonSession)
                 try {
-                    callback.onResult(false, humanizeError(error.message ?: "Unable to run package manager"))
+                    callback.onResult(
+                        false,
+                        "$stage raised an exception: ${error.message ?: error.javaClass.simpleName}"
+                    )
                 } catch (_: Exception) {
                     // The client may have left the confirmation screen.
                 }
@@ -83,6 +89,18 @@ class InstallerUserService : IInstallerUserService.Stub() {
                 try { apk.close() } catch (_: Exception) { }
             }
         }
+    }
+
+    private fun extractSessionId(result: CommandResult): Int? {
+        val output = result.stdout + "\n" + result.stderr
+        val patterns = listOf(
+            Regex("\\[(\\d+)]"),
+            Regex("\\b(?:session(?:\\s+id)?|id)\\s*[:=\\[]?\\s*(\\d+)\\b", RegexOption.IGNORE_CASE),
+            Regex("^\\s*(\\d+)\\s*$", setOf(RegexOption.MULTILINE))
+        )
+        return patterns.asSequence()
+            .mapNotNull { it.find(output)?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            .firstOrNull()
     }
 
     private fun abandonSession(sessionId: Int) {
@@ -120,7 +138,9 @@ class InstallerUserService : IInstallerUserService.Stub() {
                 return CommandResult(
                     -2,
                     stdout.toString(),
-                    stderr.toString().ifBlank { "Command timed out after ${COMMAND_TIMEOUT_SECONDS}s: ${command.joinToString(" ")}" }
+                    stderr.toString().ifBlank {
+                        "Command timed out after ${COMMAND_TIMEOUT_SECONDS}s: ${command.joinToString(" ")}"
+                    }
                 )
             }
             stdoutReader.join(2_000)
@@ -131,28 +151,41 @@ class InstallerUserService : IInstallerUserService.Stub() {
         }
     }
 
+    private fun formatStageFailure(stage: String, result: CommandResult): String {
+        return buildString {
+            append(stage)
+            append(" failed (exit code ")
+            append(result.exitCode)
+            append(")")
+            val details = result.displayOutput()
+            if (details.isNotBlank()) {
+                append("\n")
+                append(humanizeError(details))
+            }
+        }
+    }
+
     private fun humanizeError(raw: String): String {
         val normalized = raw.trim()
         return when {
-            normalized.isBlank() -> "Package manager failed without an error message."
-            normalized.contains("timed out", ignoreCase = true) -> normalized
+            normalized.isBlank() -> "Package manager returned no diagnostic output."
             normalized.contains("INSTALL_FAILED_VERSION_DOWNGRADE", ignoreCase = true) ->
-                "A newer version of this app is already installed."
+                "A newer version of this app is already installed.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_ALREADY_EXISTS", ignoreCase = true) ->
-                "This app is already installed."
+                "This app is already installed.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_INSUFFICIENT_STORAGE", ignoreCase = true) ->
-                "There is not enough storage space."
+                "There is not enough storage space.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_INVALID_APK", ignoreCase = true) ->
-                "The APK is invalid or corrupted."
+                "The APK is invalid or corrupted.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_NO_MATCHING_ABIS", ignoreCase = true) ->
-                "This APK is not compatible with this device."
+                "This APK is not compatible with this device.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE", ignoreCase = true) ->
-                "The installed app has a different signing key."
+                "The installed app has a different signing key.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_USER_RESTRICTED", ignoreCase = true) ->
-                "The device user is not allowed to install this APK."
+                "The device user is not allowed to install this APK.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_DEPRECATED_SDK_VERSION", ignoreCase = true) ->
-                "This APK targets an Android version that this device no longer allows."
-            else -> normalized.replaceFirstChar { it.uppercase() }
+                "This APK targets an Android version that this device no longer allows.\nDetails: $normalized"
+            else -> normalized
         }
     }
 
@@ -165,17 +198,16 @@ class InstallerUserService : IInstallerUserService.Stub() {
             get() = exitCode == 0
 
         fun displayOutput(): String = buildString {
-            if (stdout.isNotBlank()) append(stdout.trim())
+            if (stdout.isNotBlank()) append("stdout: ").append(stdout.trim())
             if (stderr.isNotBlank()) {
                 if (isNotEmpty()) append('\n')
-                append(stderr.trim())
+                append("stderr: ").append(stderr.trim())
             }
-            if (isEmpty()) append("Command failed with exit code $exitCode")
+            if (isEmpty()) append("Command returned no output")
         }
     }
 
     companion object {
         private const val COMMAND_TIMEOUT_SECONDS = 60L
-        private val SESSION_ID_PATTERN = Regex("\\[(\\d+)]")
     }
 }
