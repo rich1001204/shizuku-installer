@@ -88,10 +88,10 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
         _installState.value = InstallState.Installing(apk)
         installTimeoutJob?.cancel()
         installTimeoutJob = viewModelScope.launch {
-            delay(60_000)
+            delay(210_000)
             if (_installState.value is InstallState.Installing) {
                 _installState.value = InstallState.Failure(
-                    "Installation timed out. Check Shizuku and try again.",
+                    "Installation timed out while waiting for the package manager. Check Shizuku and try again.",
                     apk
                 )
             }

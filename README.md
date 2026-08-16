@@ -13,7 +13,7 @@ Shizuku Installer is a minimal Android application for installing APK files thro
 - Supports `ACTION_VIEW` with `content://` and `file://` URIs.
 - Reads file name, package name, version name, version code, application label, and file size.
 - Shows a confirmation screen before any installation begins.
-- Uses a Shizuku UserService with shell identity to stream the APK to Android's `pm install` command and report stdout, stderr, and exit status.
+- Uses a Shizuku UserService with shell identity to run Android's `pm install-create`, `pm install-write`, and `pm install-commit` commands, streaming the APK and reporting stdout, stderr, and exit status.
 - Reports Shizuku states separately: not installed, service not running, permission required, and connected.
 - Uses a true-black AMOLED Material 3 interface with a custom adaptive launcher icon.
 
@@ -41,12 +41,12 @@ Review confirmation screen
     ↓
 Press Install APK
     ↓
-Shizuku UserService runs a controlled `pm install --user current -S <size> -` command
+Shizuku UserService runs controlled `pm install-create`, `pm install-write -S <size>`, and `pm install-commit` commands
     ↓
 Installation result is shown
 ```
 
-The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The privileged install backend uses Shizuku's UserService shell identity and Android's `pm install` command, then reports the command result to the UI. This shell route is intentionally compatible with Shizuku-based installer workflows, while the official Shizuku API guide generally recommends UserService and framework Binder APIs over legacy text-based process execution.
+The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The privileged install backend uses Shizuku's UserService shell identity and Android's three-step `pm` install session commands, then reports the command result to the UI. This follows the shell-session pattern used by Install Lion's public source implementation. This shell route is intentionally compatible with Shizuku-based installer workflows, while the official Shizuku API guide generally recommends UserService and framework Binder APIs over legacy text-based process execution.
 
 ## APK file association
 
