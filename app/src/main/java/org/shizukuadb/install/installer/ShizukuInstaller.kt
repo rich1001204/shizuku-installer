@@ -1,30 +1,26 @@
 package org.shizukuadb.install.installer
 
-import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.ContentResolver
-import android.content.Intent
 import android.content.ServiceConnection
 import android.net.Uri
-import android.os.Bundle
+import android.provider.OpenableColumns
 import android.os.IBinder
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import rikka.shizuku.Shizuku
 import org.shizukuadb.install.IInstallCallback
 import org.shizukuadb.install.IInstallerUserService
 
-class ShizukuInstaller(private val context: android.content.Context) {
+class ShizukuInstaller {
     private var userService: IInstallerUserService? = null
     private var bound = false
     private var pending: PendingInstall? = null
     private var active: ResultOnce? = null
-    private val requestCounter = AtomicInteger(7000)
 
     private val userServiceArgs = Shizuku.UserServiceArgs(
         ComponentName("org.shizukuadb.install", InstallerUserService::class.java.name)
-    ).daemon(false).processNameSuffix("installer").version(2)
+    ).daemon(false).processNameSuffix("installer").version(3)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -80,7 +76,7 @@ class ShizukuInstaller(private val context: android.content.Context) {
         try {
             val descriptor = request.resolver.openFileDescriptor(request.uri, "r")
                 ?: throw IOException("Unable to open the selected APK")
-            val requestCode = requestCounter.incrementAndGet()
+            val sizeBytes = resolveSize(request.resolver, request.uri, descriptor)
             val result = ResultOnce(request.onResult)
             val callback = object : IInstallCallback.Stub() {
                 override fun onResult(success: Boolean, message: String?) {
@@ -88,26 +84,31 @@ class ShizukuInstaller(private val context: android.content.Context) {
                     if (active === result) active = null
                 }
             }
-            val resultIntent = Intent(context, InstallResultReceiver::class.java).apply {
-                action = "org.shizukuadb.install.INSTALL_RESULT.$requestCode"
-                putExtras(Bundle().apply {
-                    putBinder(InstallResultReceiver.EXTRA_CALLBACK, callback.asBinder())
-                })
-            }
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                requestCode,
-                resultIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            )
             active = result
             descriptor.use {
-                service.install(it, pendingIntent.intentSender)
+                service.install(it, sizeBytes, callback)
             }
         } catch (error: Exception) {
             active = null
             request.onResult(false, error.message ?: "Unable to start installation")
         }
+    }
+
+    private fun resolveSize(
+        resolver: ContentResolver,
+        uri: Uri,
+        descriptor: android.os.ParcelFileDescriptor
+    ): Long {
+        if (descriptor.statSize > 0) return descriptor.statSize
+        return resolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
+        } ?: -1L
     }
 
     private class ResultOnce(private val deliver: (Boolean, String) -> Unit) {

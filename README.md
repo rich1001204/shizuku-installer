@@ -13,7 +13,7 @@ Shizuku Installer is a minimal Android application for installing APK files thro
 - Supports `ACTION_VIEW` with `content://` and `file://` URIs.
 - Reads file name, package name, version name, version code, application label, and file size.
 - Shows a confirmation screen before any installation begins.
-- Uses Shizuku's UserService and Android `PackageInstaller.Session` for the privileged installation operation.
+- Uses a Shizuku UserService with shell identity to stream the APK to Android's `pm install` command and report stdout, stderr, and exit status.
 - Reports Shizuku states separately: not installed, service not running, permission required, and connected.
 - Uses a true-black AMOLED Material 3 interface with a custom adaptive launcher icon.
 
@@ -41,12 +41,12 @@ Review confirmation screen
     ↓
 Press Install APK
     ↓
-Shizuku UserService creates a PackageInstaller session
+Shizuku UserService runs a controlled `pm install --user current -S <size> -` command
     ↓
 Installation result is shown
 ```
 
-The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow.
+The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The privileged install backend uses Shizuku's UserService shell identity and Android's `pm install` command, then reports the command result to the UI. This shell route is intentionally compatible with Shizuku-based installer workflows, while the official Shizuku API guide generally recommends UserService and framework Binder APIs over legacy text-based process execution.
 
 ## APK file association
 
@@ -58,7 +58,7 @@ The manifest registers the following Android intent contract:
 - `application/vnd.android.package-archive`
 - `content://` and `file://` URI support
 
-The app reads the selected file using `ContentResolver`. It does not assume that APKs are stored in `/sdcard/Download/`, and it does not require users to manually copy APKs into a fixed app directory.
+The app reads the selected file using `ContentResolver`. It does not assume that APKs are stored in `/sdcard/Download/`, and it does not require users to manually copy APKs into a fixed app directory. The original URI is streamed through a file descriptor to the Shizuku UserService; the app does not interpolate a user-controlled filename into a shell command.
 
 ## Installation
 

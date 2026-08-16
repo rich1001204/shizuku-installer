@@ -27,7 +27,7 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private val parser = ApkParser(application)
-    private val installer = ShizukuInstaller(application)
+    private val installer = ShizukuInstaller()
     private val _installState = MutableStateFlow<InstallState>(InstallState.Idle)
     private val _shizukuState = MutableStateFlow<ShizukuState>(ShizukuState.NotRunning)
     private val _message = MutableStateFlow<String?>(null)
