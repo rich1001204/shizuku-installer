@@ -13,7 +13,7 @@ Shizuku Installer is a minimal Android application for installing APK files thro
 - Supports `ACTION_VIEW` with `content://` and `file://` URIs.
 - Reads file name, package name, version name, version code, application label, and file size.
 - Shows a confirmation screen before any installation begins.
-- Uses a Shizuku UserService with shell identity to run Android's `pm install-create`, `pm install-write`, and `pm install-commit` commands, streaming the APK and reporting stdout, stderr, and exit status.
+- Uses a minimal Shizuku-only shell backend adapted from Install Lion: `/system/bin/sh` runs `pm install-create`, `pm install-write`, and `pm install-commit`, while the APK is streamed through stdin and stdout/stderr are reported.
 - Reports Shizuku states separately: not installed, service not running, permission required, and connected.
 - Uses a true-black AMOLED Material 3 interface with a custom adaptive launcher icon.
 
@@ -46,7 +46,7 @@ Shizuku UserService runs controlled `pm install-create`, `pm install-write -S <s
 Installation result is shown
 ```
 
-The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The privileged install backend uses Shizuku's UserService shell identity and Android's three-step `pm` install session commands, then reports the command result to the UI. This follows the shell-session pattern used by Install Lion's public source implementation. This shell route is intentionally compatible with Shizuku-based installer workflows, while the official Shizuku API guide generally recommends UserService and framework Binder APIs over legacy text-based process execution.
+The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The privileged backend follows Install Lion's proven shell protocol: a Shizuku UserService starts `/system/bin/sh`, writes a quoted `pm` command, and for `install-write` streams the APK bytes into the shell process. The old Install Lion `newProcess()` call was adapted to the modern Shizuku UserService API; no legacy Shizuku artifact is added to this project.
 
 ## APK file association
 
@@ -112,4 +112,4 @@ Check that the APK is valid, compatible with the device, has sufficient storage,
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+This project is licensed under the [GNU General Public License v3](LICENSE), because the Shizuku shell backend is adapted from Install Lion's GPLv3 implementation. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the exact upstream files, source repository, and modification scope. The Material 3 AMOLED UI and the rest of the project remain part of the same GPLv3-covered combined work.

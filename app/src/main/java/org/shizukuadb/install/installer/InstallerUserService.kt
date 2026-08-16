@@ -1,15 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Shell/session portions adapted from dadaewq/Install-Lion ShellSAIPackageInstaller.java.
+// Modified for this project on 2026-08-16; see THIRD_PARTY_NOTICES.md.
+
 package org.shizukuadb.install.installer
 
 import android.os.ParcelFileDescriptor
-import java.io.InputStream
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 import org.shizukuadb.install.IInstallCallback
 import org.shizukuadb.install.IInstallerUserService
 
+/**
+ * Minimal Shizuku-only installer backend.
+ *
+ * The shell/session flow is adapted from Install Lion's GPLv3 ShizukuShell and
+ * ShellSAIPackageInstaller classes. UI, APK metadata, and Material 3 remain
+ * separate in this project.
+ */
 class InstallerUserService : IInstallerUserService.Stub() {
     private val executor = Executors.newSingleThreadExecutor()
+    private val shell = InstallLionShell()
 
     override fun install(apk: ParcelFileDescriptor, sizeBytes: Long, callback: IInstallCallback) {
         val ownedApk = try {
@@ -18,8 +27,7 @@ class InstallerUserService : IInstallerUserService.Stub() {
             try {
                 callback.onResult(
                     false,
-                    "preparing APK stream failed: unable to duplicate APK descriptor: " +
-                        (error.message ?: error.javaClass.simpleName)
+                    "Unable to duplicate APK descriptor: ${error.message ?: error.javaClass.simpleName}"
                 )
             } catch (_: Exception) {
                 // The client may have left the confirmation screen.
@@ -31,18 +39,16 @@ class InstallerUserService : IInstallerUserService.Stub() {
         try { apk.close() } catch (_: Exception) { }
 
         executor.execute {
-            var stage = "preparing APK stream"
             var sessionId: Int? = null
             try {
                 if (sizeBytes <= 0) {
-                    callback.onResult(false, "preparing APK stream failed: The selected APK has no readable size")
+                    callback.onResult(false, "The selected APK has no readable size")
                     return@execute
                 }
 
-                stage = "pm install-create"
-                val create = runCommand(
-                    listOf(
-                        "/system/bin/pm",
+                val create = shell.exec(
+                    ShellCommand(
+                        "pm",
                         "install-create",
                         "-r",
                         "-d",
@@ -55,21 +61,20 @@ class InstallerUserService : IInstallerUserService.Stub() {
                     )
                 )
                 if (!create.isSuccessful) {
-                    callback.onResult(false, formatStageFailure(stage, create))
+                    callback.onResult(false, formatFailure("pm install-create", create))
                     return@execute
                 }
 
                 sessionId = extractSessionId(create)
                 if (sessionId == null) {
-                    callback.onResult(false, "$stage returned no session ID.\n${create.displayOutput()}")
+                    callback.onResult(false, "pm install-create returned no session ID.\n${create.displayOutput()}")
                     return@execute
                 }
 
-                stage = "pm install-write"
                 val write = ParcelFileDescriptor.AutoCloseInputStream(ownedApk).use { input ->
-                    runCommand(
-                        listOf(
-                            "/system/bin/pm",
+                    shell.exec(
+                        ShellCommand(
+                            "pm",
                             "install-write",
                             "-S",
                             sizeBytes.toString(),
@@ -80,25 +85,26 @@ class InstallerUserService : IInstallerUserService.Stub() {
                     )
                 }
                 if (!write.isSuccessful) {
-                    callback.onResult(false, formatStageFailure("$stage (session $sessionId)", write))
+                    abandonSession(sessionId)
+                    callback.onResult(false, formatFailure("pm install-write (session $sessionId)", write))
                     return@execute
                 }
 
-                stage = "pm install-commit"
-                val commit = runCommand(
-                    listOf("/system/bin/pm", "install-commit", sessionId.toString())
+                val commit = shell.exec(
+                    ShellCommand("pm", "install-commit", sessionId.toString())
                 )
                 if (commit.isSuccessful) {
                     callback.onResult(true, "Installation completed")
                 } else {
-                    callback.onResult(false, formatStageFailure("$stage (session $sessionId)", commit))
+                    abandonSession(sessionId)
+                    callback.onResult(false, formatFailure("pm install-commit (session $sessionId)", commit))
                 }
             } catch (error: Exception) {
                 sessionId?.let(::abandonSession)
                 try {
                     callback.onResult(
                         false,
-                        "$stage raised an exception: ${error.message ?: error.javaClass.simpleName}"
+                        "Shizuku install exception: ${error.message ?: error.javaClass.simpleName}"
                     )
                 } catch (_: Exception) {
                     // The client may have left the confirmation screen.
@@ -109,7 +115,7 @@ class InstallerUserService : IInstallerUserService.Stub() {
         }
     }
 
-    private fun extractSessionId(result: CommandResult): Int? {
+    private fun extractSessionId(result: ShellResult): Int? {
         val output = result.stdout + "\n" + result.stderr
         val patterns = listOf(
             Regex("\\[(\\d+)]"),
@@ -122,71 +128,16 @@ class InstallerUserService : IInstallerUserService.Stub() {
     }
 
     private fun abandonSession(sessionId: Int) {
-        try {
-            runCommand(listOf("/system/bin/pm", "install-abandon", sessionId.toString()))
-        } catch (_: Exception) {
-            // Best-effort cleanup only.
-        }
+        shell.exec(ShellCommand("pm", "install-abandon", sessionId.toString()))
     }
 
-    private fun runCommand(command: List<String>, input: InputStream? = null): CommandResult {
-        val process = ProcessBuilder(command).redirectErrorStream(false).start()
-        val stdout = StringBuilder()
-        val stderr = StringBuilder()
-        val stdoutReader = thread(name = "pm-stdout") {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { stdout.append(it).append('\n') }
-            }
-        }
-        val stderrReader = thread(name = "pm-stderr") {
-            process.errorStream.bufferedReader().useLines { lines ->
-                lines.forEach { stderr.append(it).append('\n') }
-            }
-        }
-
-        try {
-            process.outputStream.use { output ->
-                input?.use { source -> source.copyTo(output) }
-            }
-            val finished = process.waitFor(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                stdoutReader.join(2_000)
-                stderrReader.join(2_000)
-                return CommandResult(
-                    -2,
-                    stdout.toString(),
-                    stderr.toString().ifBlank {
-                        "Command timed out after ${COMMAND_TIMEOUT_SECONDS}s: ${command.joinToString(" ")}"
-                    }
-                )
-            }
-            stdoutReader.join(2_000)
-            stderrReader.join(2_000)
-            return CommandResult(process.exitValue(), stdout.toString(), stderr.toString())
-        } finally {
-            if (process.isAlive) process.destroyForcibly()
-        }
-    }
-
-    private fun formatStageFailure(stage: String, result: CommandResult): String {
-        return buildString {
-            append(stage)
-            append(" failed (exit code ")
-            append(result.exitCode)
-            append(")")
-            val details = result.displayOutput()
-            if (details.isNotBlank()) {
-                append("\n")
-                append(humanizeError(details))
-            }
-        }
+    private fun formatFailure(stage: String, result: ShellResult): String {
+        return "$stage failed (exit code ${result.exitCode})\n${humanizeError(result.displayOutput())}"
     }
 
     private fun humanizeError(raw: String): String {
         val normalized = raw.trim()
         return when {
-            normalized.isBlank() -> "Package manager returned no diagnostic output."
             normalized.contains("INSTALL_FAILED_VERSION_DOWNGRADE", ignoreCase = true) ->
                 "A newer version of this app is already installed.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_ALREADY_EXISTS", ignoreCase = true) ->
@@ -201,31 +152,8 @@ class InstallerUserService : IInstallerUserService.Stub() {
                 "The installed app has a different signing key.\nDetails: $normalized"
             normalized.contains("INSTALL_FAILED_USER_RESTRICTED", ignoreCase = true) ->
                 "The device user is not allowed to install this APK.\nDetails: $normalized"
-            normalized.contains("INSTALL_FAILED_DEPRECATED_SDK_VERSION", ignoreCase = true) ->
-                "This APK targets an Android version that this device no longer allows.\nDetails: $normalized"
+            normalized.isBlank() -> "Package manager returned no diagnostic output."
             else -> normalized
         }
-    }
-
-    private data class CommandResult(
-        val exitCode: Int,
-        val stdout: String,
-        val stderr: String
-    ) {
-        val isSuccessful: Boolean
-            get() = exitCode == 0
-
-        fun displayOutput(): String = buildString {
-            if (stdout.isNotBlank()) append("stdout: ").append(stdout.trim())
-            if (stderr.isNotBlank()) {
-                if (isNotEmpty()) append('\n')
-                append("stderr: ").append(stderr.trim())
-            }
-            if (isEmpty()) append("Command returned no output")
-        }
-    }
-
-    companion object {
-        private const val COMMAND_TIMEOUT_SECONDS = 60L
     }
 }

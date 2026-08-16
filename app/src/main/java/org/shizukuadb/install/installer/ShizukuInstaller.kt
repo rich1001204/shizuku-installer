@@ -20,7 +20,7 @@ class ShizukuInstaller {
 
     private val userServiceArgs = Shizuku.UserServiceArgs(
         ComponentName("org.shizukuadb.install", InstallerUserService::class.java.name)
-    ).daemon(false).processNameSuffix("installer").version(5)
+    ).daemon(false).processNameSuffix("installer").version(6)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
