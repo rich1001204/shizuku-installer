@@ -12,6 +12,24 @@ class InstallerUserService : IInstallerUserService.Stub() {
     private val executor = Executors.newSingleThreadExecutor()
 
     override fun install(apk: ParcelFileDescriptor, sizeBytes: Long, callback: IInstallCallback) {
+        val ownedApk = try {
+            apk.dup()
+        } catch (error: Exception) {
+            try {
+                callback.onResult(
+                    false,
+                    "preparing APK stream failed: unable to duplicate APK descriptor: " +
+                        (error.message ?: error.javaClass.simpleName)
+                )
+            } catch (_: Exception) {
+                // The client may have left the confirmation screen.
+            } finally {
+                try { apk.close() } catch (_: Exception) { }
+            }
+            return
+        }
+        try { apk.close() } catch (_: Exception) { }
+
         executor.execute {
             var stage = "preparing APK stream"
             var sessionId: Int? = null
@@ -48,7 +66,7 @@ class InstallerUserService : IInstallerUserService.Stub() {
                 }
 
                 stage = "pm install-write"
-                val write = ParcelFileDescriptor.AutoCloseInputStream(apk).use { input ->
+                val write = ParcelFileDescriptor.AutoCloseInputStream(ownedApk).use { input ->
                     runCommand(
                         listOf(
                             "/system/bin/pm",
@@ -86,7 +104,7 @@ class InstallerUserService : IInstallerUserService.Stub() {
                     // The client may have left the confirmation screen.
                 }
             } finally {
-                try { apk.close() } catch (_: Exception) { }
+                try { ownedApk.close() } catch (_: Exception) { }
             }
         }
     }
