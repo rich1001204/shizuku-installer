@@ -2,7 +2,8 @@ package org.shizukuadb.install.model
 
 import android.content.Context
 import android.content.pm.PackageManager
-import rikka.shizuku.Shizuku
+import moe.shizuku.api.ShizukuService
+import org.shizukuadb.install.installer.legacy.ShizukuShell
 
 sealed interface ShizukuState {
     val title: String
@@ -20,12 +21,12 @@ sealed interface ShizukuState {
 
     data object PermissionRequired : ShizukuState {
         override val title = "Shizuku permission required"
-        override val detail = "Grant this app permission in Shizuku to continue."
+        override val detail = "Grant this app access in Shizuku, then refresh this screen."
     }
 
     data object Connected : ShizukuState {
         override val title = "Shizuku Connected"
-        override val detail = "Permission granted"
+        override val detail = "Install Lion legacy Shizuku API is ready"
     }
 
     companion object {
@@ -37,10 +38,8 @@ sealed interface ShizukuState {
                 false
             }
             if (!installed) return NotInstalled
-            if (!Shizuku.pingBinder()) return NotRunning
-            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-                return PermissionRequired
-            }
+            if (!ShizukuService.pingBinder()) return NotRunning
+            if (!ShizukuShell.getInstance().isAvailable()) return PermissionRequired
             return Connected
         }
     }

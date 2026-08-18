@@ -1,6 +1,6 @@
 # Shizuku Installer
 
-Shizuku Installer is a minimal Android application for installing APK files through [Shizuku](https://shizuku.rikka.app/). Its primary workflow is intentionally file-manager-first: tap an APK in any file manager, choose **Shizuku Installer**, review the APK information, and then explicitly confirm installation.
+Shizuku Installer is a minimal Android application based on Install Lion's original Shizuku installer path. It keeps the legacy Shizuku V3 API and shell/session installation protocol, removes Install Lion's unrelated installation modes, and presents the workflow in a Material 3 AMOLED interface.
 
 > Shizuku Installer requires Shizuku to perform privileged APK installation.
 >
@@ -8,20 +8,21 @@ Shizuku Installer is a minimal Android application for installing APK files thro
 
 ## Features
 
-- Package name: `org.shizukuadb.install`
+- Package name: `org.shizukuadb.install`.
 - Registers as a handler for `application/vnd.android.package-archive` APK files.
 - Supports `ACTION_VIEW` with `content://` and `file://` URIs.
 - Reads file name, package name, version name, version code, application label, and file size.
 - Shows a confirmation screen before any installation begins.
-- Uses a minimal Shizuku-only shell backend adapted from Install Lion: `/system/bin/sh` runs `pm install-create`, `pm install-write`, and `pm install-commit`, while the APK is streamed through stdin and stdout/stderr are reported.
-- Reports Shizuku states separately: not installed, service not running, permission required, and connected.
+- Keeps Install Lion's original legacy `moe.shizuku.api.ShizukuService.newProcess()` shell path.
+- Runs the original three-step session protocol: `pm install-create`, `pm install-write`, and `pm install-commit`.
+- Streams the selected APK into the original Shizuku shell process and reports stdout, stderr, and exit code.
 - Uses a true-black AMOLED Material 3 interface with a custom adaptive launcher icon.
 
 ## Requirements
 
 - Android 8.0 (API 26) or newer.
 - [Shizuku](https://shizuku.rikka.app/) installed and running.
-- Shizuku permission granted to Shizuku Installer.
+- Access granted to this app in Shizuku.
 - Android Studio Ladybug or newer, or a machine with the Android SDK and JDK 17+.
 
 The app does not require root, a PC, ADB commands, or USB debugging for its installation operation. Shizuku itself may offer different startup methods depending on the Android device and version; consult the official Shizuku documentation for that setup.
@@ -41,12 +42,18 @@ Review confirmation screen
     ↓
 Press Install APK
     ↓
-Shizuku UserService runs controlled `pm install-create`, `pm install-write -S <size>`, and `pm install-commit` commands
+Install Lion legacy ShizukuShell.newProcess()
+    ↓
+pm install-create
+    ↓
+pm install-write -S <size> <session id> base.apk
+    ↓
+pm install-commit <session id>
     ↓
 Installation result is shown
 ```
 
-The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The privileged backend follows Install Lion's proven shell protocol: a Shizuku UserService starts `/system/bin/sh`, writes a quoted `pm` command, and for `install-write` streams the APK bytes into the shell process. The old Install Lion `newProcess()` call was adapted to the modern Shizuku UserService API; no legacy Shizuku artifact is added to this project.
+The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The backend intentionally uses the original Install Lion V3 API artifact and `ShizukuService.newProcess()` rather than replacing it with the modern UserService API.
 
 ## APK file association
 
@@ -58,14 +65,14 @@ The manifest registers the following Android intent contract:
 - `application/vnd.android.package-archive`
 - `content://` and `file://` URI support
 
-The app reads the selected file using `ContentResolver`. It does not assume that APKs are stored in `/sdcard/Download/`, and it does not require users to manually copy APKs into a fixed app directory. The original URI is streamed through a file descriptor to the Shizuku UserService; the app does not interpolate a user-controlled filename into a shell command.
+The app reads the selected file using `ContentResolver`. It does not assume that APKs are stored in `/sdcard/Download/`, and it does not require users to manually copy APKs into a fixed app directory.
 
 ## Installation
 
 1. Install and start Shizuku on the Android device.
 2. Build the debug APK with the command below.
 3. Install `app/build/outputs/apk/debug/app-debug.apk` on the device.
-4. Grant Shizuku permission when prompted.
+4. Grant or approve access for this app in the legacy Shizuku permission flow if prompted.
 5. Open an APK from a file manager and select **Shizuku Installer**.
 
 ## Building
@@ -84,7 +91,7 @@ The project has been verified in this repository with `./gradlew assembleDebug`.
 
 ## Usage
 
-For the intended workflow, tap an APK in a file manager. Shizuku Installer displays the APK metadata and current Shizuku status. Press **Install APK** only after reviewing the information. During installation the app displays progress, then a success or human-readable failure screen.
+For the intended workflow, tap an APK in a file manager. Shizuku Installer displays the APK metadata and current Shizuku status. Press **Install APK** only after reviewing the information. During installation the app displays progress, then a success or detailed failure screen containing the original Install Lion shell command output.
 
 If a file manager does not provide an APK MIME type, the **Open APK** button can be used as a fallback.
 
@@ -98,9 +105,9 @@ Install Shizuku from its official distribution channel, then return to the app.
 
 Open Shizuku and start its service. The status card can be refreshed from the app.
 
-### Shizuku permission required
+### Shizuku access is required
 
-Press **Grant Shizuku Permission** and approve the request in Shizuku.
+Open Shizuku, grant access to `Shizuku Installer` if requested, return to the app, and press **Refresh**. The app checks legacy shell availability using the same `echo test` probe as Install Lion.
 
 ### The APK does not appear in Open with
 
@@ -108,8 +115,8 @@ Confirm that the file manager identifies the file as `application/vnd.android.pa
 
 ### Installation failed
 
-Check that the APK is valid, compatible with the device, has sufficient storage, and is not signed with a key incompatible with an already-installed version. The app reports a concise error instead of exposing a raw exception stack trace.
+The result screen includes the exact Install Lion-style command, exit code, stdout, and stderr. Check that the APK is valid, compatible with the device, has sufficient storage, and is not signed with a key incompatible with an already-installed version.
 
 ## License
 
-This project is licensed under the [GNU General Public License v3](LICENSE), because the Shizuku shell backend is adapted from Install Lion's GPLv3 implementation. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the exact upstream files, source repository, and modification scope. The Material 3 AMOLED UI and the rest of the project remain part of the same GPLv3-covered combined work.
+This project is licensed under the [GNU General Public License v3](LICENSE), because the Shizuku installation backend is directly adapted from Install Lion's GPLv3 implementation. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the upstream files, bundled legacy Shizuku artifacts, and modification scope. The Material 3 AMOLED UI and APK metadata workflow are project-specific modifications within the combined GPLv3 work.

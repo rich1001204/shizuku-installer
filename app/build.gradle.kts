@@ -12,8 +12,8 @@ android {
         applicationId = "org.shizukuadb.install"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0-install-lion"
     }
 
     buildFeatures {
@@ -58,7 +58,8 @@ dependencies {
     implementation("androidx.compose.material3:material3:1.3.1")
     implementation("androidx.compose.material:material-icons-extended:1.7.6")
     implementation("androidx.documentfile:documentfile:1.0.1")
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
+    // Install Lion's original Shizuku V3 API and shared protocol classes.
+    implementation(files("libs/shizuku-api-3.1.0.aar"))
+    implementation(files("libs/shizuku-shared-3.1.0.aar"))
     debugImplementation("androidx.compose.ui:ui-tooling:1.7.6")
 }

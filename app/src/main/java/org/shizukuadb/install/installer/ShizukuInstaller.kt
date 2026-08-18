@@ -1,127 +1,152 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from dadaewq/Install-Lion ShizukuSAIPackageInstaller and ShellSAIPackageInstaller.
+// Modified for this project on 2026-08-18; see THIRD_PARTY_NOTICES.md.
 package org.shizukuadb.install.installer
 
-import android.content.ComponentName
 import android.content.ContentResolver
-import android.content.ServiceConnection
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.os.IBinder
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicBoolean
-import rikka.shizuku.Shizuku
-import org.shizukuadb.install.IInstallCallback
-import org.shizukuadb.install.IInstallerUserService
+import java.util.concurrent.Executors
+import org.shizukuadb.install.installer.legacy.ShizukuShell
+import org.shizukuadb.install.installer.legacy.Shell
 
+/**
+ * Minimal single-APK port of Install Lion's Shizuku installer.
+ * It intentionally keeps the original legacy Shizuku V3 API path.
+ */
 class ShizukuInstaller {
-    private var userService: IInstallerUserService? = null
-    private var bound = false
-    private var pending: PendingInstall? = null
-    private var active: ResultOnce? = null
+    private val executor = Executors.newSingleThreadExecutor()
+    private val shell = ShizukuShell.getInstance()
 
-    private val userServiceArgs = Shizuku.UserServiceArgs(
-        ComponentName("org.shizukuadb.install", InstallerUserService::class.java.name)
-    ).daemon(false).processNameSuffix("installer").version(6)
-
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            userService = service?.let(IInstallerUserService.Stub::asInterface)
-            dispatchPending()
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            userService = null
-            bound = false
-            active?.complete(false, "Shizuku installer service disconnected")
-            active = null
-        }
-    }
+    fun isAvailable(): Boolean = shell.isAvailable()
 
     fun install(
         resolver: ContentResolver,
         uri: Uri,
         onResult: (Boolean, String) -> Unit
     ) {
-        pending = PendingInstall(resolver, uri, onResult)
-        if (userService == null) {
-            if (!bound) {
-                bound = true
+        executor.execute {
+            try {
+                if (!shell.isAvailable()) {
+                    onResult(false, "Install Lion ShizukuShell is unavailable. Start Shizuku and grant this app access.")
+                    return@execute
+                }
+
+                val descriptor = resolver.openFileDescriptor(uri, "r")
+                    ?: throw IOException("Unable to open the selected APK")
+                val sizeBytes = resolveSize(resolver, uri, descriptor.statSize)
+                if (sizeBytes <= 0) {
+                    descriptor.close()
+                    onResult(false, "Unable to determine APK size")
+                    return@execute
+                }
+
+                var sessionId: Int? = null
                 try {
-                    Shizuku.bindUserService(userServiceArgs, connection)
+                    val create = createSession()
+                    sessionId = create.first
+                    val createResult = create.second
+                    if (!createResult.isSuccessful) {
+                        onResult(false, formatFailure("pm install-create", createResult))
+                        return@execute
+                    }
+
+                    val writeResult = descriptor.use { pfd ->
+                        val input = android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)
+                        shell.exec(
+                            Shell.Command(
+                                "pm",
+                                "install-write",
+                                "-S",
+                                sizeBytes.toString(),
+                                sessionId.toString(),
+                                "base.apk"
+                            ),
+                            input
+                        )
+                    }
+                    if (!writeResult.isSuccessful) {
+                        abandonSession(sessionId)
+                        onResult(false, formatFailure("pm install-write (session $sessionId)", writeResult))
+                        return@execute
+                    }
+
+                    val commitResult = shell.exec(
+                        Shell.Command("pm", "install-commit", sessionId.toString())
+                    )
+                    if (commitResult.isSuccessful) {
+                        onResult(true, "Installation completed")
+                    } else {
+                        abandonSession(sessionId)
+                        onResult(false, formatFailure("pm install-commit (session $sessionId)", commitResult))
+                    }
                 } catch (error: Exception) {
-                    bound = false
-                    pending = null
-                    onResult(false, error.message ?: "Unable to connect to Shizuku installer service")
+                    sessionId?.let(::abandonSession)
+                    try { descriptor.close() } catch (_: Exception) { }
+                    onResult(false, "Install Lion Shizuku exception: ${error.message ?: error.javaClass.simpleName}")
                 }
+            } catch (error: Exception) {
+                onResult(false, error.message ?: "Unable to start Install Lion Shizuku installer")
             }
-        } else {
-            dispatchPending()
         }
     }
 
-    fun unbind() {
-        active?.complete(false, "Installation was interrupted")
-        active = null
-        pending = null
-        if (bound) {
-            try { Shizuku.unbindUserService(userServiceArgs, connection, true) } catch (_: Exception) { }
-            bound = false
-            userService = null
-        }
+    fun shutdown() {
+        executor.shutdownNow()
     }
 
-    private fun dispatchPending() {
-        val service = userService ?: return
-        val request = pending ?: return
-        pending = null
-        try {
-            val descriptor = request.resolver.openFileDescriptor(request.uri, "r")
-                ?: throw IOException("Unable to open the selected APK")
-            val sizeBytes = resolveSize(request.resolver, request.uri, descriptor)
-            val result = ResultOnce(request.onResult)
-            val callback = object : IInstallCallback.Stub() {
-                override fun onResult(success: Boolean, message: String?) {
-                    result.complete(success, message ?: "The installer returned no details")
-                    if (active === result) active = null
-                }
+    private fun createSession(): Pair<Int, Shell.Result> {
+        val commands = listOf(
+            Shell.Command(
+                "pm",
+                "install-create",
+                "-r",
+                "-d",
+                "--user 0",
+                "--install-location",
+                "0",
+                "-i",
+                shell.makeLiteral("org.shizukuadb.install")
+            ),
+            Shell.Command(
+                "pm",
+                "install-create",
+                "-r",
+                "-d",
+                "-- user 0",
+                "-i",
+                shell.makeLiteral("org.shizukuadb.install")
+            )
+        )
+        val attempts = StringBuilder()
+        for (command in commands) {
+            val result = shell.exec(command)
+            if (result.isSuccessful) {
+                val id = extractSessionId(result.out)
+                if (id != null) return id to result
             }
-            active = result
-            descriptor.use {
-                service.install(it, sizeBytes, callback)
-            }
-        } catch (error: Exception) {
-            active = null
-            request.onResult(false, error.message ?: "Unable to start installation")
+            attempts.append("\n\n").append(result)
         }
+        throw IllegalStateException("Unable to create Install Lion session:$attempts")
     }
 
-    private fun resolveSize(
-        resolver: ContentResolver,
-        uri: Uri,
-        descriptor: android.os.ParcelFileDescriptor
-    ): Long {
-        if (descriptor.statSize > 0) return descriptor.statSize
-        return resolver.query(
-            uri,
-            arrayOf(OpenableColumns.SIZE),
-            null,
-            null,
-            null
-        )?.use { cursor ->
+    private fun extractSessionId(output: String): Int? {
+        return Regex("(\\d+)").find(output)?.groupValues?.getOrNull(1)?.toIntOrNull()
+    }
+
+    private fun abandonSession(sessionId: Int) {
+        shell.exec(Shell.Command("pm", "install-abandon", sessionId.toString()))
+    }
+
+    private fun resolveSize(resolver: ContentResolver, uri: Uri, statSize: Long): Long {
+        if (statSize > 0) return statSize
+        return resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
         } ?: -1L
     }
 
-    private class ResultOnce(private val deliver: (Boolean, String) -> Unit) {
-        private val completed = AtomicBoolean(false)
-
-        fun complete(success: Boolean, message: String) {
-            if (completed.compareAndSet(false, true)) deliver(success, message)
-        }
+    private fun formatFailure(stage: String, result: Shell.Result): String {
+        return "$stage failed\n${result}"
     }
-
-    private data class PendingInstall(
-        val resolver: ContentResolver,
-        val uri: Uri,
-        val onResult: (Boolean, String) -> Unit
-    )
 }

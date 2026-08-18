@@ -39,7 +39,7 @@
         </activity>
 
         <provider
-            android:name="rikka.shizuku.ShizukuProvider"
+            android:name="moe.shizuku.api.ShizukuBinderReceiveProvider"
             android:authorities="${applicationId}.shizuku"
             android:enabled="true"
             android:exported="true"

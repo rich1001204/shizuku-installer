@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import rikka.shizuku.Shizuku
 import org.shizukuadb.install.apk.ApkInfo
 import org.shizukuadb.install.apk.ApkParser
 import org.shizukuadb.install.installer.ShizukuInstaller
@@ -22,10 +21,6 @@ import org.shizukuadb.install.model.InstallState
 import org.shizukuadb.install.model.ShizukuState
 
 class InstallerViewModel(application: Application) : AndroidViewModel(application) {
-    companion object {
-        const val SHIZUKU_PERMISSION_REQUEST_CODE = 4101
-    }
-
     private val parser = ApkParser(application)
     private val installer = ShizukuInstaller()
     private val _installState = MutableStateFlow<InstallState>(InstallState.Idle)
@@ -38,14 +33,7 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
     val shizukuState: StateFlow<ShizukuState> = _shizukuState.asStateFlow()
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    private val permissionListener = object : Shizuku.OnRequestPermissionResultListener {
-        override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
-            if (requestCode == SHIZUKU_PERMISSION_REQUEST_CODE) refreshShizuku()
-        }
-    }
-
     init {
-        Shizuku.addRequestPermissionResultListener(permissionListener)
         refreshShizuku()
     }
 
@@ -77,13 +65,13 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun install() {
         val apk = (_installState.value as? InstallState.Ready)?.apk ?: return
-        refreshShizuku()
         val currentShizuku = ShizukuState.read(getApplication())
         _shizukuState.value = currentShizuku
         if (currentShizuku !is ShizukuState.Connected) {
             _message.value = currentShizuku.detail
             return
         }
+
         _message.value = null
         _installState.value = InstallState.Installing(apk)
         installTimeoutJob?.cancel()
@@ -91,7 +79,7 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
             delay(210_000)
             if (_installState.value is InstallState.Installing) {
                 _installState.value = InstallState.Failure(
-                    "Installation timed out while waiting for the package manager. Check Shizuku and try again.",
+                    "Installation timed out while waiting for Install Lion Shizuku shell.",
                     apk
                 )
             }
@@ -114,11 +102,7 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun requestShizukuPermission() {
-        try {
-            Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
-        } catch (error: Exception) {
-            _message.value = error.message ?: "Unable to request Shizuku permission"
-        }
+        _message.value = "Install Lion uses its original Shizuku V3 API. Open Shizuku, grant this app access if requested, then press Refresh."
     }
 
     fun openShizuku(): Intent? {
@@ -149,8 +133,7 @@ class InstallerViewModel(application: Application) : AndroidViewModel(applicatio
 
     override fun onCleared() {
         installTimeoutJob?.cancel()
-        Shizuku.removeRequestPermissionResultListener(permissionListener)
-        installer.unbind()
+        installer.shutdown()
         super.onCleared()
     }
 }

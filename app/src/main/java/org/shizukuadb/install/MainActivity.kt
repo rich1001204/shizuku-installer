@@ -337,7 +337,7 @@ private fun StatusCard(
                 Spacer(Modifier.height(14.dp))
                 when (state) {
                     ShizukuState.PermissionRequired -> OutlinedButton(onClick = onRequestPermission, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                        Text("Grant Shizuku Permission")
+                        Text("Check Shizuku Access")
                     }
                     ShizukuState.NotInstalled, ShizukuState.NotRunning -> OutlinedButton(onClick = onOpenShizuku, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
                         Icon(Icons.Default.OpenInNew, contentDescription = null)
