@@ -65,6 +65,7 @@ public final class ShizukuShell implements Shell {
             Thread stderrReader = InstallLionIOUtils.writeStreamToStringBuilder(stderr, process.getErrorStream());
             OutputStream output = process.getOutputStream();
             output.write(command.toString().getBytes());
+            output.write('\n');
             output.flush();
 
             if (inputPipe != null && process.alive()) {

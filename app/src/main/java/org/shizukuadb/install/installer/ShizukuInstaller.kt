@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Adapted from dadaewq/Install-Lion ShizukuSAIPackageInstaller and ShellSAIPackageInstaller.
-// Modified for this project on 2026-08-18; see THIRD_PARTY_NOTICES.md.
+// Modified for this project on 2026-08-19; see THIRD_PARTY_NOTICES.md.
 package org.shizukuadb.install.installer
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -27,67 +28,81 @@ class ShizukuInstaller {
         onResult: (Boolean, String) -> Unit
     ) {
         executor.execute {
+            var descriptor: ParcelFileDescriptor? = null
+            var sessionId: Int? = null
+            var stagingPath: String? = null
             try {
                 if (!shell.isAvailable()) {
                     onResult(false, "Install Lion ShizukuShell is unavailable. Start Shizuku and grant this app access.")
                     return@execute
                 }
 
-                val descriptor = resolver.openFileDescriptor(uri, "r")
+                descriptor = resolver.openFileDescriptor(uri, "r")
                     ?: throw IOException("Unable to open the selected APK")
-                val sizeBytes = resolveSize(resolver, uri, descriptor.statSize)
+                val sizeBytes = resolveSize(resolver, uri, descriptor!!.statSize)
                 if (sizeBytes <= 0) {
-                    descriptor.close()
                     onResult(false, "Unable to determine APK size")
                     return@execute
                 }
 
-                var sessionId: Int? = null
-                try {
-                    val create = createSession()
-                    sessionId = create.first
-                    val createResult = create.second
-                    if (!createResult.isSuccessful) {
-                        onResult(false, formatFailure("pm install-create", createResult))
-                        return@execute
-                    }
+                val create = createSession()
+                sessionId = create.first
+                val createResult = create.second
+                if (!createResult.isSuccessful) {
+                    onResult(false, formatFailure("pm install-create", createResult))
+                    return@execute
+                }
 
-                    val writeResult = descriptor.use { pfd ->
-                        val input = android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)
-                        shell.exec(
-                            Shell.Command(
-                                "pm",
-                                "install-write",
-                                "-S",
-                                sizeBytes.toString(),
-                                sessionId.toString(),
-                                "base.apk"
-                            ),
-                            input
-                        )
-                    }
-                    if (!writeResult.isSuccessful) {
-                        abandonSession(sessionId)
-                        onResult(false, formatFailure("pm install-write (session $sessionId)", writeResult))
-                        return@execute
-                    }
-
-                    val commitResult = shell.exec(
-                        Shell.Command("pm", "install-commit", sessionId.toString())
+                stagingPath = "/data/local/tmp/org.shizukuadb.install-$sessionId.apk"
+                val stageScript = "set -e; cat > ${shell.makeLiteral(stagingPath!!)}; printf 'staged\\n'"
+                val stageResult = ParcelFileDescriptor.AutoCloseInputStream(descriptor!!).use { input ->
+                    shell.exec(
+                        Shell.Command("sh", "-c", shell.makeLiteral(stageScript)),
+                        input
                     )
-                    if (commitResult.isSuccessful) {
-                        onResult(true, "Installation completed")
-                    } else {
-                        abandonSession(sessionId)
-                        onResult(false, formatFailure("pm install-commit (session $sessionId)", commitResult))
-                    }
-                } catch (error: Exception) {
-                    sessionId?.let(::abandonSession)
-                    try { descriptor.close() } catch (_: Exception) { }
-                    onResult(false, "Install Lion Shizuku exception: ${error.message ?: error.javaClass.simpleName}")
+                }
+                descriptor = null
+                if (!stageResult.isSuccessful) {
+                    abandonSession(sessionId!!)
+                    cleanupStaging(stagingPath)
+                    onResult(false, formatFailure("stage APK to $stagingPath", stageResult))
+                    return@execute
+                }
+
+                val writeResult = shell.exec(
+                    Shell.Command(
+                        "pm",
+                        "install-write",
+                        "-S",
+                        sizeBytes.toString(),
+                        sessionId.toString(),
+                        "base.apk",
+                        stagingPath!!
+                    )
+                )
+                if (!writeResult.isSuccessful) {
+                    abandonSession(sessionId!!)
+                    cleanupStaging(stagingPath)
+                    onResult(false, formatFailure("pm install-write (session $sessionId)", writeResult))
+                    return@execute
+                }
+
+                val commitResult = shell.exec(
+                    Shell.Command("pm", "install-commit", sessionId.toString())
+                )
+                cleanupStaging(stagingPath)
+                if (commitResult.isSuccessful) {
+                    onResult(true, "Installation completed")
+                } else {
+                    abandonSession(sessionId!!)
+                    onResult(false, formatFailure("pm install-commit (session $sessionId)", commitResult))
                 }
             } catch (error: Exception) {
-                onResult(false, error.message ?: "Unable to start Install Lion Shizuku installer")
+                sessionId?.let(::abandonSession)
+                cleanupStaging(stagingPath)
+                onResult(false, "Install Lion Shizuku exception: ${error.message ?: error.javaClass.simpleName}")
+            } finally {
+                try { descriptor?.close() } catch (_: Exception) { }
             }
         }
     }
@@ -137,6 +152,12 @@ class ShizukuInstaller {
 
     private fun abandonSession(sessionId: Int) {
         shell.exec(Shell.Command("pm", "install-abandon", sessionId.toString()))
+    }
+
+    private fun cleanupStaging(path: String?) {
+        if (!path.isNullOrBlank()) {
+            shell.exec(Shell.Command("rm", "-f", path))
+        }
     }
 
     private fun resolveSize(resolver: ContentResolver, uri: Uri, statSize: Long): Long {

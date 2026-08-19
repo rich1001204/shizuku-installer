@@ -12,8 +12,8 @@ android {
         applicationId = "org.shizukuadb.install"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0.0-install-lion"
+        versionCode = 3
+        versionName = "2.1.0-epipe-fix"
     }
 
     buildFeatures {

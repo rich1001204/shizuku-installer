@@ -10,7 +10,7 @@ The following source files are adapted from the Shizuku installation path in [da
 - `app/src/main/java/com/modosa/apkinstaller/util/installer/ShellSAIPackageInstaller.java`
 - `app/src/main/java/com/modosa/apkinstaller/util/installer/shizuku/ShizukuSAIPackageInstaller.java`
 
-This project keeps the original legacy Shizuku V3 API route, including the `moe.shizuku.api.ShizukuService.newProcess()` and `moe.shizuku.api.RemoteProcess` protocol, and removes Install Lion's IceBox, DSM, Root, DPM, uninstall, settings, analytics, and unrelated installer paths. The single-APK session flow remains `pm install-create`, `pm install-write`, and `pm install-commit`.
+This project keeps the original legacy Shizuku V3 API route, including the `moe.shizuku.api.ShizukuService.newProcess()` and `moe.shizuku.api.RemoteProcess` protocol, and removes Install Lion's IceBox, DSM, Root, DPM, uninstall, settings, analytics, and unrelated installer paths. The single-APK session flow remains `pm install-create`, `pm install-write`, and `pm install-commit`. The original direct binary-to-shell stdin path is adjusted to stage the APK under `/data/local/tmp` first; this avoids an EPIPE observed on the target device when the shell command and a large binary payload shared one stdin pipe. The staging file is removed after the session step completes.
 
 The adapted Java files under `app/src/main/java/org/shizukuadb/install/installer/legacy/` and the shell/session portion of `ShizukuInstaller.kt` are modified versions and are provided under the GNU General Public License, version 3. The corresponding GPLv3 license text is in `LICENSE`; the modification date is 2026-08-18.
 

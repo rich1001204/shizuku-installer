@@ -46,14 +46,16 @@ Install Lion legacy ShizukuShell.newProcess()
     ↓
 pm install-create
     ↓
-pm install-write -S <size> <session id> base.apk
+cat APK bytes to /data/local/tmp staging file
+    ↓
+pm install-write -S <size> <session id> base.apk <staging file>
     ↓
 pm install-commit <session id>
     ↓
 Installation result is shown
 ```
 
-The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The backend intentionally uses the original Install Lion V3 API artifact and `ShizukuService.newProcess()` rather than replacing it with the modern UserService API.
+The app does not automatically install an APK when it receives `ACTION_VIEW`. Installation only starts after the user presses **Install APK**. The **Open APK** button on the home screen is a fallback entry point, not the primary workflow. The backend intentionally uses the original Install Lion V3 API artifact and `ShizukuService.newProcess()` rather than replacing it with the modern UserService API. To avoid the `EPIPE` behavior that can occur when a shell command and a large binary payload share the same stdin, the APK is first staged in `/data/local/tmp` through the same Shizuku shell, then passed to `pm install-write` as a file path. The staging file is removed after write or commit.
 
 ## APK file association
 
